@@ -1,0 +1,6 @@
+﻿__pycache__/
+*.pyc
+proxy_out.txt
+proxy_err.txt
+outputs/
+.env
