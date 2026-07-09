@@ -1,155 +1,134 @@
-﻿# Tee Proxy — Architecture Specification
+﻿# codex-tee — Architecture Specification
 
-> Version 1.0 | 2026-07-09 | Observability layer between Codex++ and DeepSeek
+> Node.js transparent proxy · Codex++ → Tee → DeepSeek · LangSmith observability
 
 ---
 
-## 1. Current Architecture
+## 1. Architecture
 
 ```
-+-------+   :57321   +------------+   :5000    +-----------+   api.deepseek   +------------+
-| Codex | --------> |  Codex++   | --------> | Tee Proxy | --------------> |  DeepSeek  |
-| (app) |           | (Electron) |           | (Python)  |                  |   API      |
++-------+   :57321   +------------+   :57322    +-----------+   api.deepseek   +------------+
+| Codex | --------> |  Codex++   | --------> | codex-tee | --------------> |  DeepSeek  |
+| (app) |           | (Electron) |           | (Node.js) |                  |   API      |
 +-------+           +------------+           +-----------+                  +------------+
                          │                        │
-                         │ widget injection       │ out-of-band trace
+                         │ widget injection       │ trace
                          ▼                        ▼
                     +----------+             +-----------+
                     | Codex UI |             | LangSmith |
-                    | (widgets)|             |  (SaaS)   |
                     +----------+             +-----------+
 ```
 
 ### Port Assignments
 
-| Hop | Component   | Listen Address        | Upstream             | Role                        |
-|-----|-------------|-----------------------|----------------------|-----------------------------|
-| 1   | Codex       | —                     | `127.0.0.1:57321/v1` | Desktop client              |
-| 2   | Codex++     | `127.0.0.1:57321`     | `127.0.0.1:5000/v1`  | Widget injection + forwarding |
-| 3   | Tee Proxy   | `127.0.0.1:5000`      | `https://api.deepseek.com` | Trace + forward to LLM |
-| 4   | DeepSeek    | `api.deepseek.com:443` | —                    | LLM provider                |
-
-### Configuration
-
-| File / Setting              | Key                          | Value                              |
-|-----------------------------|------------------------------|------------------------------------|
-| `config.toml`               | `base_url`                   | `http://127.0.0.1:57321/v1`        |
-| Codex++ upstream (UI)       | API endpoint                 | `http://127.0.0.1:5000/v1`         |
-| Tee Proxy `proxy.py`        | `TARGET`                     | `https://api.deepseek.com`         |
-
-### Why this order?
-
-Codex++ sits first because:
-- It auto-resets `config.toml` to `:57321` — if Tee Proxy were first, Codex++ would break the chain on restart
-- It handles widget injection into Codex UI — we still need this until Phase 3
-- Tee Proxy only needs to trace + forward, which it can do from any position in the chain
+| Hop | Component   | Listen            | Upstream                    | Role                      |
+|-----|-------------|-------------------|-----------------------------|---------------------------|
+| 1   | Codex       | —                 | `127.0.0.1:57321/v1`        | Desktop client            |
+| 2   | Codex++     | `127.0.0.1:57321` | `127.0.0.1:57322/v1`        | Widget injection + pass-through |
+| 3   | codex-tee   | `127.0.0.1:57322` | `https://api.deepseek.com`  | Trace + model rewrite + forward |
+| 4   | DeepSeek    | `api.deepseek.com` | —                           | LLM provider              |
 
 ---
 
-## 2. Tee Proxy: Role & Responsibilities
+## 2. codex-tee Responsibilities
 
-Tee Proxy is a **transparent observability layer**. It does not modify requests or responses — only reads them.
-
-| Responsibility          | How                                              |
-|-------------------------|--------------------------------------------------|
-| Forward requests        | Pass-through to DeepSeek, preserve all headers    |
-| Extract metrics         | Parse `usage` from response body                  |
-| Console logging         | Print turn number, model, hit/miss per request    |
-| LangSmith tracing       | `create_run()` with full metadata per turn         |
-| Health check            | `GET /_health` returns target + status             |
-
----
-
-## 3. Proxy Endpoints
-
-### 3.1 Forwarded (pass-through to DeepSeek)
-
-| Method | Path                    | → `https://api.deepseek.com`            |
-|--------|-------------------------|------------------------------------------|
-| POST   | `/v1/chat/completions`  | `/v1/chat/completions`                   |
-| *      | `/v1/*`                 | `/v1/*`                                  |
-
-Behavior: headers, body, method preserved. Response returned unchanged. Streaming (SSE) proxied transparently.
-
-### 3.2 Native
-
-| Method | Path       | Response                                              |
-|--------|------------|-------------------------------------------------------|
-| GET    | `/_health` | `{"status":"ok","target":"https://api.deepseek.com"}`  |
+| Feature               | Detail                                              |
+|-----------------------|-----------------------------------------------------|
+| Request forwarding    | POST `/v1/chat/completions` → DeepSeek, headers preserved |
+| Streaming (SSE)       | Transparent chunk-by-chunk pass-through             |
+| Model name rewriting  | GPT model names → DeepSeek equivalents for sub-agent spawns |
+| LangSmith tracing     | Full prompt/completion + all cache metrics per turn |
+| Health check          | `GET /_health` → `{"status":"ok"}`                  |
+| Config hot-reload     | Watches `config.js`, reloads on change              |
 
 ---
 
-## 4. Data Pipeline (per request)
+## 3. Model Rewrite Rules
+
+Codex sends `gpt-*` model names for sub-agent spawns. Codex++ doesn't translate these. codex-tee rewrites them:
+
+| Input              | Output              |
+|--------------------|---------------------|
+| `gpt-5.4`          | `deepseek-v4-pro`   |
+| `gpt-5.4-mini`     | `deepseek-v4-flash` |
+| `gpt-5.5`          | `deepseek-v4-pro`   |
+| `gpt-5.3-codex`    | `deepseek-v4-pro`   |
+| `gpt-5.2`          | `deepseek-v4-pro`   |
+| * (any other)      | `deepseek-v4-pro` (default) |
+
+---
+
+## 4. LangSmith Integration
+
+| Setting     | Value                              |
+|-------------|------------------------------------|
+| Project     | `codex-tee`                        |
+| Trace ID    | `turn-{n}-{timestamp}` per request |
+| Auth        | `LANGSMITH_API_KEY` env var or in `sinks/langsmith.js` |
+
+### Metrics Captured
+
+| Field                 | Source                  |
+|-----------------------|-------------------------|
+| `prompt_tokens`       | `usage`                 |
+| `completion_tokens`   | `usage`                 |
+| `cached_tokens`       | `prompt_tokens_details` |
+| `cache_hit_tokens`    | `usage` (DeepSeek)      |
+| `cache_miss_tokens`   | `usage` (DeepSeek)      |
+| `cache_hit_rate_pct`  | computed                |
+| `model`               | request body (rewritten)|
+| `latency_ms`          | measured                |
+
+---
+
+## 5. Sinks Architecture
 
 ```
-Codex → :57321 → Codex++ → :5000 → Tee Proxy
-                                        │
-                               ┌────────┴────────┐
-                               │ 1. Receive req  │
-                               │ 2. Forward to   │
-                               │    DeepSeek      │
-                               │ 3. Receive resp │
-                               │ 4. Extract usage│
-                               └────────┬────────┘
-                                        │
-                          ┌─────────────┼─────────────┐
-                          ▼             ▼             ▼
-                     Console        LangSmith      Codex++
-                     [turn N]       trace.run()    ← response
-                     hit/miss       + metadata     (unchanged)
-                                                     │
-                                                     ▼
-                                                   Codex
+server.js
+    │
+    ├── sinks/langsmith.js    → LangSmith trace (production)
+    ├── sinks/demo.js          → Console pretty-print (debug)
+    └── sinks/registry.js     → Sink loader
 ```
 
----
-
-## 5. Metrics Captured
-
-| Field                 | Source                    | Description                         |
-|-----------------------|---------------------------|-------------------------------------|
-| `prompt_tokens`       | `usage`                   | Total input tokens                  |
-| `completion_tokens`   | `usage`                   | Total output tokens                 |
-| `cached_tokens`       | `prompt_tokens_details`   | OpenAI-standard cached count        |
-| `cache_hit_tokens`    | `usage` (DeepSeek)        | Tokens served from KV-cache         |
-| `cache_miss_tokens`   | `usage` (DeepSeek)        | Tokens that missed cache            |
-| `cache_hit_rate_pct`  | computed                  | `hit / (hit+miss) × 100`            |
-| `model`               | request body              | e.g. `deepseek-v4-pro`             |
-| `latency_ms`          | measured                  | Proxy → DeepSeek round-trip         |
-| `turn`                | counter                   | Monotonic per proxy session         |
+Sinks are pluggable modules. Each receives `{request, response, metrics, latency_ms}` per turn. Add new sinks to `config.js` `sinks` array.
 
 ---
 
-## 6. LangSmith Integration
-
-| Setting              | Value                         |
-|----------------------|-------------------------------|
-| Project              | `codex-cache-analysis`        |
-| Auth                 | `LANGSMITH_API_KEY` env var   |
-| Trace unit            | One `run` per chat completion |
-
-Trace metadata includes all 9 metrics from §5.
-
----
-
-## 7. Project Files
+## 6. Project Files
 
 ```
 tee-proxy/
-├── proxy.py           # Main server (Python stdlib, only langsmith as dep)
-├── run_proxy.py        # Launcher with DETACHED_PROCESS flag
-├── start_proxy.bat     # Windows batch launcher
-├── test_proxy.py       # Smoke test
-├── SPEC.md             # This document
-└── outputs/            # Logs
+├── config.js          # Listen port, upstream, model rewrite rules, sinks
+├── server.js          # HTTP proxy + SSE streaming
+├── package.json       # npm metadata (dep: langsmith)
+├── sinks/
+│   ├── langsmith.js   # LangSmith trace sink
+│   ├── demo.js        # Console debug sink
+│   └── registry.js    # Sink loader
+├── start-tee.bat      # Windows launcher
+├── launcher.vbs       # Silent VBScript launcher (no console window)
+├── SPEC.md            # This document
+└── README.md          # Usage instructions
 ```
 
 ---
 
-## 8. Roadmap
+## 7. Deployment
 
-| Phase | Goal                                      | Status    |
-|-------|-------------------------------------------|-----------|
-| 1     | Tee Proxy between Codex++ and DeepSeek    | ✅ current |
-| 2     | Replace Codex++ proxy · Tee Proxy on :57321 | planned  |
-| 3     | Widgets: context / cache / cost in Codex UI | planned  |
+### Start
+```cmd
+start-tee.bat
+```
+or silently:
+```cmd
+wscript launcher.vbs
+```
+
+### Stop
+```powershell
+Stop-Process -Name node -Force  # (only if codex-tee is the sole node process)
+```
+
+### Auto-start (planned)
+Windows Scheduled Task: trigger on system startup + resume from sleep.
