@@ -1,145 +1,110 @@
 ﻿# Tee Proxy — Architecture Specification
 
-> Version 1.0 | 2026-07-09 | Current: observability layer · Future: replaces Codex++
+> Version 1.0 | 2026-07-09 | Observability layer between Codex++ and DeepSeek
 
 ---
 
-## 1. Current Architecture (Codex++ Still Active)
+## 1. Current Architecture
 
 ```
-+-------+   :57321   +------------+   api.deepseek.com   +------------+
-| Codex | --------> |  Codex++   | -------------------> |  DeepSeek  |
-| (app) |           | (Electron) |                       |   API      |
-+-------+           +------------+                       +------------+
-                         │
-                         │ widget injection
-                         ▼
-                    +----------+
-                    | Codex UI |
-                    | (widgets)|
-                    +----------+
++-------+   :57321   +------------+   :5000    +-----------+   api.deepseek   +------------+
+| Codex | --------> |  Codex++   | --------> | Tee Proxy | --------------> |  DeepSeek  |
+| (app) |           | (Electron) |           | (Python)  |                  |   API      |
++-------+           +------------+           +-----------+                  +------------+
+                         │                        │
+                         │ widget injection       │ out-of-band trace
+                         ▼                        ▼
+                    +----------+             +-----------+
+                    | Codex UI |             | LangSmith |
+                    | (widgets)|             |  (SaaS)   |
+                    +----------+             +-----------+
 ```
 
-| Component   | Address                    | Role                              |
-|-------------|----------------------------|-----------------------------------|
-| Codex       | → `127.0.0.1:57321/v1`     | Desktop client, reads `config.toml` |
-| Codex++     | `127.0.0.1:57321`          | Proxy + widget injector + script engine |
-| DeepSeek    | `https://api.deepseek.com` | Upstream LLM                      |
+### Port Assignments
 
-### Problems with Codex++
+| Hop | Component   | Listen Address        | Upstream             | Role                        |
+|-----|-------------|-----------------------|----------------------|-----------------------------|
+| 1   | Codex       | —                     | `127.0.0.1:57321/v1` | Desktop client              |
+| 2   | Codex++     | `127.0.0.1:57321`     | `127.0.0.1:5000/v1`  | Widget injection + forwarding |
+| 3   | Tee Proxy   | `127.0.0.1:5000`      | `https://api.deepseek.com` | Trace + forward to LLM |
+| 4   | DeepSeek    | `api.deepseek.com:443` | —                    | LLM provider                |
 
-- Laptop sleep/wake breaks the Electron → Codex IPC, requiring manual restart
-- Auto-resets `config.toml` `base_url` on every launch
-- Opaque internals — no visibility into proxy behavior
+### Configuration
+
+| File / Setting              | Key                          | Value                              |
+|-----------------------------|------------------------------|------------------------------------|
+| `config.toml`               | `base_url`                   | `http://127.0.0.1:57321/v1`        |
+| Codex++ upstream (UI)       | API endpoint                 | `http://127.0.0.1:5000/v1`         |
+| Tee Proxy `proxy.py`        | `TARGET`                     | `https://api.deepseek.com`         |
+
+### Why this order?
+
+Codex++ sits first because:
+- It auto-resets `config.toml` to `:57321` — if Tee Proxy were first, Codex++ would break the chain on restart
+- It handles widget injection into Codex UI — we still need this until Phase 3
+- Tee Proxy only needs to trace + forward, which it can do from any position in the chain
 
 ---
 
-## 2. Tee Proxy: Current Role
+## 2. Tee Proxy: Role & Responsibilities
 
-Tee Proxy is an **observability sidecar** inserted between Codex and Codex++:
+Tee Proxy is a **transparent observability layer**. It does not modify requests or responses — only reads them.
 
-```
-+-------+   :5000    +-----------+   :57321   +------------+   api.deepseek   +------------+
-| Codex | --------> | Tee Proxy | --------> |  Codex++   | --------------> |  DeepSeek  |
-| (app) |           | (Python)  |           | (Electron) |                  |   API      |
-+-------+           +-----------+           +------------+                  +------------+
-                         │
-                         │ out-of-band trace
-                         ▼
-                    +-----------+
-                    | LangSmith |
-                    |  (SaaS)   |
-                    +-----------+
-```
-
-| Component   | Address                    | Role                              |
-|-------------|----------------------------|-----------------------------------|
-| Codex       | → `127.0.0.1:5000/v1`      | `config.toml` `base_url`          |
-| Tee Proxy   | `127.0.0.1:5000`           | Trace every API call, forward to Codex++ |
-| Codex++     | `127.0.0.1:57321`          | Forward to DeepSeek + widget injection |
-| DeepSeek    | `https://api.deepseek.com` | Upstream LLM                      |
-| LangSmith   | `https://api.smith.langchain.com` | Trace backend            |
-
-### Caveat
-
-Codex++ rewrites `config.toml` `base_url` to `:57321` on every launch. When this happens, Tee Proxy is bypassed until the config is manually restored to `:5000`.
+| Responsibility          | How                                              |
+|-------------------------|--------------------------------------------------|
+| Forward requests        | Pass-through to DeepSeek, preserve all headers    |
+| Extract metrics         | Parse `usage` from response body                  |
+| Console logging         | Print turn number, model, hit/miss per request    |
+| LangSmith tracing       | `create_run()` with full metadata per turn         |
+| Health check            | `GET /_health` returns target + status             |
 
 ---
 
-## 3. Tee Proxy Endpoints
+## 3. Proxy Endpoints
 
-### 3.1 Forwarded (pass-through to Codex++)
+### 3.1 Forwarded (pass-through to DeepSeek)
 
-| Method | Path                    | Forwarded To                              |
-|--------|-------------------------|-------------------------------------------|
-| POST   | `/v1/chat/completions`  | `http://127.0.0.1:57321/v1/chat/completions` |
-| *      | `/v1/*`                 | `http://127.0.0.1:57321/v1/*`             |
+| Method | Path                    | → `https://api.deepseek.com`            |
+|--------|-------------------------|------------------------------------------|
+| POST   | `/v1/chat/completions`  | `/v1/chat/completions`                   |
+| *      | `/v1/*`                 | `/v1/*`                                  |
+
+Behavior: headers, body, method preserved. Response returned unchanged. Streaming (SSE) proxied transparently.
 
 ### 3.2 Native
 
-| Method | Path       | Response                                           |
-|--------|------------|----------------------------------------------------|
-| GET    | `/_health` | `{"status":"ok","target":"http://127.0.0.1:57321"}` |
-| GET    | `/stats`   | (planned) Per-turn cache & token summary            |
+| Method | Path       | Response                                              |
+|--------|------------|-------------------------------------------------------|
+| GET    | `/_health` | `{"status":"ok","target":"https://api.deepseek.com"}`  |
 
 ---
 
-## 4. Data Pipeline
+## 4. Data Pipeline (per request)
 
 ```
-Request: Codex → :5000/v1/chat/completions
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│ 1. Tee Proxy receives request           │
-│    Preserves all headers + body         │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│ 2. Forward to Codex++ (:57321)          │
-│    HTTP proxy, no modification          │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│ 3. Codex++ forwards to DeepSeek         │
-│    (handles auth, model routing)        │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│ 4. Response flows back:                 │
-│    DeepSeek → Codex++ → Tee Proxy       │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│ 5. Tee Proxy extracts usage from body   │
-│    ├─ prompt_tokens                     │
-│    ├─ completion_tokens                 │
-│    ├─ prompt_cache_hit_tokens  (DS)     │
-│    ├─ prompt_cache_miss_tokens (DS)     │
-│    └─ cached_tokens (OpenAI compat)     │
-└──────────────┬──────────────────────────┘
-               │
-       ┌───────┴───────┐
-       ▼               ▼
-┌─────────────┐  ┌──────────────┐
-│ Console log │  │ LangSmith    │
-│ [turn 001]  │  │ trace.run()  │
-│ hit= miss=  │  │ + metadata   │
-└─────────────┘  └──────────────┘
-       │               │
-       ▼               ▼
-┌─────────────────────────────────────────┐
-│ 6. Return unchanged response to Codex   │
-└─────────────────────────────────────────┘
+Codex → :57321 → Codex++ → :5000 → Tee Proxy
+                                        │
+                               ┌────────┴────────┐
+                               │ 1. Receive req  │
+                               │ 2. Forward to   │
+                               │    DeepSeek      │
+                               │ 3. Receive resp │
+                               │ 4. Extract usage│
+                               └────────┬────────┘
+                                        │
+                          ┌─────────────┼─────────────┐
+                          ▼             ▼             ▼
+                     Console        LangSmith      Codex++
+                     [turn N]       trace.run()    ← response
+                     hit/miss       + metadata     (unchanged)
+                                                     │
+                                                     ▼
+                                                   Codex
 ```
 
 ---
 
-## 5. Metrics Captured (per turn)
+## 5. Metrics Captured
 
 | Field                 | Source                    | Description                         |
 |-----------------------|---------------------------|-------------------------------------|
@@ -150,37 +115,20 @@ Request: Codex → :5000/v1/chat/completions
 | `cache_miss_tokens`   | `usage` (DeepSeek)        | Tokens that missed cache            |
 | `cache_hit_rate_pct`  | computed                  | `hit / (hit+miss) × 100`            |
 | `model`               | request body              | e.g. `deepseek-v4-pro`             |
-| `latency_ms`          | measured                  | Proxy → Codex++ → DeepSeek RTT     |
+| `latency_ms`          | measured                  | Proxy → DeepSeek round-trip         |
 | `turn`                | counter                   | Monotonic per proxy session         |
 
 ---
 
 ## 6. LangSmith Integration
 
-| Setting              | Value                                              |
-|----------------------|----------------------------------------------------|
-| Project              | `codex-cache-analysis`                             |
-| Auth                 | `LANGSMITH_API_KEY` env var                        |
-| Trace granularity    | One `run` per `/v1/chat/completions` call          |
-| Run type             | `llm`                                              |
+| Setting              | Value                         |
+|----------------------|-------------------------------|
+| Project              | `codex-cache-analysis`        |
+| Auth                 | `LANGSMITH_API_KEY` env var   |
+| Trace unit            | One `run` per chat completion |
 
-### Trace Structure
-
-```
-Project: codex-cache-analysis
-  Run: turn_001
-    inputs:  {"messages": [...]}
-    outputs: {"choices": [...]}
-    extra.metadata:
-      turn: 1
-      model: "deepseek-v4-pro"
-      prompt_tokens: 8500
-      completion_tokens: 1200
-      cache_hit_tokens: 2300
-      cache_miss_tokens: 6200
-      cache_hit_rate_pct: 27.1
-      latency_ms: 3200
-```
+Trace metadata includes all 9 metrics from §5.
 
 ---
 
@@ -188,30 +136,20 @@ Project: codex-cache-analysis
 
 ```
 tee-proxy/
-├── proxy.py           # Proxy server (Python stdlib, zero deps beyond langsmith)
+├── proxy.py           # Main server (Python stdlib, only langsmith as dep)
 ├── run_proxy.py        # Launcher with DETACHED_PROCESS flag
 ├── start_proxy.bat     # Windows batch launcher
-├── test_proxy.py       # Integration smoke test
+├── test_proxy.py       # Smoke test
 ├── SPEC.md             # This document
-└── outputs/            # Logs & artifacts
+└── outputs/            # Logs
 ```
 
 ---
 
-## 8. Future Roadmap: Replace Codex++
+## 8. Roadmap
 
-```
-Phase 1 (now):     Tee Proxy as observability sidecar
-                   Codex → :5000 (trace) → :57321 → DeepSeek
-
-Phase 2 (planned): Tee Proxy replaces Codex++ proxy layer
-                   Codex → :57321 (trace + forward) → DeepSeek
-                   - Proxy listens on :57321
-                   - Codex++ proxy process disabled
-                   - Retain Codex++ script loader for widgets (or build overlay)
-
-Phase 3 (planned): Widgets
-                   - Context size, cache hit rate, token cost
-                   - Poll /stats or WebSocket
-                   - Injection via retained Codex++ loader or standalone overlay
-```
+| Phase | Goal                                      | Status    |
+|-------|-------------------------------------------|-----------|
+| 1     | Tee Proxy between Codex++ and DeepSeek    | ✅ current |
+| 2     | Replace Codex++ proxy · Tee Proxy on :57321 | planned  |
+| 3     | Widgets: context / cache / cost in Codex UI | planned  |
