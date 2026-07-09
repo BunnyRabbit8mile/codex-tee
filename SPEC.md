@@ -39,7 +39,6 @@
 | Model name rewriting  | GPT model names → DeepSeek equivalents for sub-agent spawns |
 | LangSmith tracing     | Full prompt/completion + all cache metrics per turn |
 | Health check          | `GET /_health` → `{"status":"ok"}`                  |
-| Config hot-reload     | Watches `config.js`, reloads on change              |
 
 ---
 
