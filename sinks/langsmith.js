@@ -20,7 +20,7 @@ function isSSE(headers, body) {
 
 function parseSSE(body) {
   const chunks = [];
-  for (const line of body.replace(/\r$/, "").split("\n")) {
+  for (const line of body.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")) {
     if (!line || line.startsWith(":")) continue;
     let payload = null;
     if (line.startsWith("data: ")) payload = line.slice(6).trim();
