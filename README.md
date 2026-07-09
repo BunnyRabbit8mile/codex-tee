@@ -1,29 +1,26 @@
 ﻿# codex-tee
 
-OpenAI-compatible tee proxy. Sits between Codex CLI and Codex++, mirrors traffic to pluggable observability sinks.
+Transparent tee proxy between Codex++ and DeepSeek. Traces every API call to LangSmith with full cache metrics.
 
 ```
-Codex CLI  ──→  tee (57322)  ──→  Codex++ (57321)  ──→  LLM
-                  │
-                  ├──→ LangSmith        (fire-and-forget)
-                  ├──→ custom-sink-A
-                  └──→ custom-sink-B
+Codex++ (57321) ──→ codex-tee (57322) ──→ DeepSeek API
+                         │
+                         ├──→ LangSmith        (fire-and-forget)
+                         └──→ custom sinks
 ```
 
 ## Quick Start
 
 ```bash
-# 1. Set LangSmith credentials (optional)
+# 1. Set LangSmith credentials
 set LANGSMITH_API_KEY=lsv2_your_key_here
 set LANGSMITH_PROJECT=codex-tee
 
 # 2. Start the tee
-node server.js
-# → [tee] listening on http://127.0.0.1:57322
+start-tee.bat
+# → [tee] 127.0.0.1:57322 → https://api.deepseek.com
 
-# 3. Point Codex CLI at the tee
-# In ~/.codex/config.toml:
-#   base_url = "http://127.0.0.1:57322/v1"
+# 3. Configure Codex++ upstream to http://127.0.0.1:57322/v1
 ```
 
 ## Adding a new sink
@@ -41,18 +38,12 @@ async function ingest(trace) {
 module.exports = { ingest };
 ```
 
-Then register it in `config.js` → `sinks` array:
-
-```js
-sinks: [
-  require("./sinks/langsmith"),
-  require("./sinks/my-sink"),   // ← add here
-],
-```
+Then register it in `config.js` → `sinks` array.
 
 ## Architecture
 
-- **Zero latency**: the tee is a pass-through `Transform` stream — data flows upstream → client without buffering
-- **Fire-and-forget sinks**: mirrors run async, never block the response
-- **Built-in Node.js only**: no npm install required
+- **Zero latency**: pass-through `Transform` stream — data flows upstream → client without buffering
+- **Fire-and-forget sinks**: traces run async, never block the response
+- **Model rewrite**: translates gpt-* model names to DeepSeek equivalents for sub-agent spawns
+- **Cache metrics**: extracts prompt_cache_hit_tokens / prompt_cache_miss_tokens from DeepSeek responses
 - **Pluggable**: add/remove sinks in `config.js`, one line each

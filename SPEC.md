@@ -132,3 +132,4 @@ Stop-Process -Name node -Force  # (only if codex-tee is the sole node process)
 
 ### Auto-start (planned)
 Windows Scheduled Task: trigger on system startup + resume from sleep.
+
