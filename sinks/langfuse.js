@@ -1,11 +1,12 @@
 ﻿// Langfuse sink — parses SSE, extracts cache metrics, sends traces via Langfuse SDK.
 
 const { Langfuse } = require("langfuse");
+const config = require("../config");
 
-const PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY;
-const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY;
-const HOST = process.env.LANGFUSE_HOST || "https://cloud.langfuse.com";
-const PROJECT = process.env.LANGFUSE_PROJECT || "codex-tee";
+const PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY || config.langfuse?.publicKey;
+const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY || config.langfuse?.secretKey;
+const HOST = process.env.LANGFUSE_HOST || config.langfuse?.host || "https://cloud.langfuse.com";
+const PROJECT = process.env.LANGFUSE_PROJECT || config.langfuse?.project || "codex-tee";
 
 let enabled = !!(PUBLIC_KEY && SECRET_KEY);
 if (!enabled) console.warn("[tee/langfuse] LANGFUSE_PUBLIC_KEY+SECRET_KEY not set — disabled");
@@ -68,7 +69,7 @@ function buildSSEOutput(chunks) {
     if (c.model) model = c.model;
     if (c.usage) deepMerge(usage, c.usage);
   }
-  return { model: model || "unknown", content: text.substring(0, 2000), finish_reason: finish || undefined, tokens: Object.keys(usage).length ? usage : undefined };
+  return { model: model || "unknown", content: text.substring(0, 50000), finish_reason: finish || undefined, tokens: Object.keys(usage).length ? usage : undefined };
 }
 
 // ── cache metrics ────────────────────────────────────────
@@ -151,11 +152,11 @@ async function ingest(trace) {
         cache_cached_tokens: cache.cached_tokens || 0,
         cache_miss_tokens: cache.cache_miss_tokens || 0,
         cache_hit_ratio: cache.prompt_tokens > 0
-          ? (cache.cached_tokens / cache.prompt_tokens).toFixed(4)
-          : "0",
+          ? +(cache.cached_tokens / cache.prompt_tokens).toFixed(4)
+          : 0,
         reasoning_tokens: cache.reasoning_tokens || 0,
       },
-    });
+    }).end();
   }
   catch (err) { console.error("[tee/langfuse] ingest failed:", err.message); }
 }
@@ -165,4 +166,7 @@ process.on("SIGINT", () => { langfuse?.shutdownAsync?.(); process.exit(); });
 process.on("SIGTERM", () => { langfuse?.shutdownAsync?.(); process.exit(); });
 
 module.exports = { ingest };
+
+
+
 

@@ -162,7 +162,7 @@ async function handleRequest(clientReq, clientRes) {
       clientRes.writeHead(502, { "content-type": "application/json" });
       clientRes.end(JSON.stringify({ error: "upstream unavailable", detail: err.message }));
     } else { clientRes.end(); }
-    dispatch({ method: clientReq.method, path: clientReq.url, reqHeaders: cloneHeaders(clientReq.headers), reqBody: "", resStatus: 502, resHeaders: {}, resBody: JSON.stringify({ error: err.message }), startTime, durationMs: Date.now() - startTime });
+    dispatch({ method: clientReq.method, path: clientReq.url, reqHeaders: cloneHeaders(clientReq.headers), reqBody: rawBody ? rawBody.toString("utf-8") : "", resStatus: 502, resHeaders: {}, resBody: JSON.stringify({ error: err.message }), startTime, durationMs: Date.now() - startTime });
   }
 }
 
@@ -172,3 +172,5 @@ server.listen(port, host, () => {
   console.log("[tee] " + host + ":" + port + " → " + upstreamUrl.protocol + "//" + upstreamHost);
   console.log("[tee] sinks: " + config.sinks.length + "  |  model rewrite: " + Object.keys(config.model_rewrite || {}).length + " rules");
 });
+
+
