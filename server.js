@@ -16,6 +16,7 @@ const upstreamHost = upstreamUrl.hostname;
 const upstreamPort = upstreamUrl.port || (upstreamUrl.protocol === "https:" ? 443 : 80);
 const upstreamIsHttps = upstreamUrl.protocol === "https:";
 const upstreamBasePath = upstreamUrl.pathname.replace(/\/+$/, "");
+const UPSTREAM_TIMEOUT_MS = 120_000;
 
 function cloneHeaders(hdrs) {
   const out = {};
@@ -37,15 +38,18 @@ function bufferBody(req) {
 function rewriteModel(bodyObj) {
   if (!bodyObj || !bodyObj.model) return bodyObj;
   const rewrite = config.model_rewrite || {};
+  // Exact match first
   if (rewrite[bodyObj.model]) {
     bodyObj.model = rewrite[bodyObj.model];
-  } else {
-    for (const [pattern, target] of Object.entries(rewrite)) {
-      if (bodyObj.model.startsWith(pattern)) { bodyObj.model = target; break; }
-    }
-    if (bodyObj.model.startsWith("gpt-") && config.default_model) {
-      bodyObj.model = config.default_model;
-    }
+    return bodyObj;
+  }
+  // Prefix match (sorted longest-first to avoid shorter patterns stealing matches)
+  const patterns = Object.keys(rewrite).sort((a, b) => b.length - a.length);
+  for (const pattern of patterns) {
+    if (bodyObj.model.startsWith(pattern)) { bodyObj.model = rewrite[pattern]; return bodyObj; }
+  }
+  if (bodyObj.model.startsWith("gpt-") && config.default_model) {
+    bodyObj.model = config.default_model;
   }
   return bodyObj;
 }
@@ -101,7 +105,11 @@ function forwardUpstream(clientReq, reqBody, traceBase) {
         host: upstreamHost,
         "content-length": Buffer.byteLength(reqBody),
       },
-      rejectUnauthorized: false,
+      timeout: UPSTREAM_TIMEOUT_MS,
+    });
+
+    upstreamReq.on("timeout", () => {
+      upstreamReq.destroy(new Error("upstream timeout"));
     });
 
     upstreamReq.on("response", (upstreamRes) => {
@@ -124,19 +132,27 @@ function forwardUpstream(clientReq, reqBody, traceBase) {
 }
 
 async function handleRequest(clientReq, clientRes) {
-  const startTime = Date.now();
-  const rawBody = await bufferBody(clientReq);
-  const rewrittenBody = maybeRewriteBody(rawBody);
+  // Health check
+  if (clientReq.method === "GET" && clientReq.url === "/_health") {
+    clientRes.writeHead(200, { "content-type": "application/json" });
+    clientRes.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
 
-  const traceBase = {
-    method: clientReq.method,
-    path: clientReq.url,
-    reqHeaders: cloneHeaders(clientReq.headers),
-    reqBody: rawBody.toString("utf-8"),   // original for LangSmith
-    startTime,
-  };
+  const startTime = Date.now();
 
   try {
+    const rawBody = await bufferBody(clientReq);
+    const rewrittenBody = maybeRewriteBody(rawBody);
+
+    const traceBase = {
+      method: clientReq.method,
+      path: clientReq.url,
+      reqHeaders: cloneHeaders(clientReq.headers),
+      reqBody: rawBody.toString("utf-8"),
+      startTime,
+    };
+
     const { statusCode, headers, stream, trace } = await forwardUpstream(clientReq, rewrittenBody, traceBase);
     clientRes.writeHead(statusCode, headers);
     stream.pipe(new TeeStream(trace)).pipe(clientRes);
@@ -146,7 +162,7 @@ async function handleRequest(clientReq, clientRes) {
       clientRes.writeHead(502, { "content-type": "application/json" });
       clientRes.end(JSON.stringify({ error: "upstream unavailable", detail: err.message }));
     } else { clientRes.end(); }
-    dispatch({ ...traceBase, resStatus: 502, resHeaders: {}, resBody: JSON.stringify({ error: err.message }), durationMs: Date.now() - startTime });
+    dispatch({ method: clientReq.method, path: clientReq.url, reqHeaders: cloneHeaders(clientReq.headers), reqBody: rawBody ? rawBody.toString("utf-8") : "", resStatus: 502, resHeaders: {}, resBody: JSON.stringify({ error: err.message }), startTime, durationMs: Date.now() - startTime });
   }
 }
 
@@ -156,3 +172,5 @@ server.listen(port, host, () => {
   console.log("[tee] " + host + ":" + port + " → " + upstreamUrl.protocol + "//" + upstreamHost);
   console.log("[tee] sinks: " + config.sinks.length + "  |  model rewrite: " + Object.keys(config.model_rewrite || {}).length + " rules");
 });
+
+
