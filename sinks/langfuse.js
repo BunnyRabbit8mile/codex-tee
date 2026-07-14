@@ -116,7 +116,7 @@ function extractModel(reqBody, resHeaders, resBody) {
 
 async function ingest(trace) {
   if (!enabled) return;
-  const { method, path, reqHeaders, reqBody, resStatus, resHeaders, resBody, durationMs } = trace;
+  const { method, path, reqBody, resStatus, resHeaders, resBody, durationMs } = trace;
 
   const inputs = parseBody(reqBody, {});
   const outputs = resStatus >= 400
