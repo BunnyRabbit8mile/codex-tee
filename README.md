@@ -1,20 +1,20 @@
 ﻿# codex-tee
 
-Transparent tee proxy between Codex++ and DeepSeek. Traces every API call to LangSmith with full cache metrics.
+Transparent tee proxy between Codex++ and DeepSeek. Traces every API call to Langfuse with full cache metrics.
 
 ```
 Codex++ (57321) ──→ codex-tee (57322) ──→ DeepSeek API
                          │
-                         ├──→ LangSmith        (fire-and-forget)
+                         ├──→ Langfuse        (fire-and-forget)
                          └──→ custom sinks
 ```
 
 ## Quick Start
 
 ```bash
-# 1. Set LangSmith credentials
-set LANGSMITH_API_KEY=lsv2_your_key_here
-set LANGSMITH_PROJECT=codex-tee
+# 1. Set Langfuse credentials
+set LANGFUSE_PUBLIC_KEY=pk-lf-...
+set LANGFUSE_SECRET_KEY=sk-lf-...
 
 # 2. Start the tee
 start-tee.bat
@@ -47,3 +47,5 @@ Then register it in `config.js` → `sinks` array.
 - **Model rewrite**: translates gpt-* model names to DeepSeek equivalents for sub-agent spawns
 - **Cache metrics**: extracts prompt_cache_hit_tokens / prompt_cache_miss_tokens from DeepSeek responses
 - **Pluggable**: add/remove sinks in `config.js`, one line each
+
+

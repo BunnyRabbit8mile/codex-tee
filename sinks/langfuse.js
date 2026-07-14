@@ -1,14 +1,22 @@
-﻿// LangSmith sink — parses SSE, extracts cache metrics, sends clean traces.
-// Requires: node --use-system-ca server.js
+﻿// Langfuse sink — parses SSE, extracts cache metrics, sends traces via Langfuse SDK.
 
-const https = require("https");
+const { Langfuse } = require("langfuse");
 
-const API_KEY = process.env.LANGSMITH_API_KEY;
-const PROJECT = process.env.LANGSMITH_PROJECT || "codex-tee";
-const LANGSMITH_HOST = "api.smith.langchain.com";
+const PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY;
+const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY;
+const HOST = process.env.LANGFUSE_HOST || "https://cloud.langfuse.com";
+const PROJECT = process.env.LANGFUSE_PROJECT || "codex-tee";
 
-let enabled = !!API_KEY;
-if (!enabled) console.warn("[tee/langsmith] LANGSMITH_API_KEY not set — disabled");
+let enabled = !!(PUBLIC_KEY && SECRET_KEY);
+if (!enabled) console.warn("[tee/langfuse] LANGFUSE_PUBLIC_KEY+SECRET_KEY not set — disabled");
+
+const langfuse = enabled ? new Langfuse({
+  publicKey: PUBLIC_KEY,
+  secretKey: SECRET_KEY,
+  baseUrl: HOST,
+  flushAt: 5,
+  flushInterval: 5000,
+}) : null;
 
 // ── SSE parser ───────────────────────────────────────────
 
@@ -104,70 +112,57 @@ function extractModel(reqBody, resHeaders, resBody) {
   return "unknown";
 }
 
-function postRun(payload) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify(payload);
-    const req = https.request({
-      hostname: LANGSMITH_HOST, path: "/api/v1/runs", method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": API_KEY, "Content-Length": Buffer.byteLength(data) },
-      timeout: 10000,
-    }, (res) => {
-      let body = "";
-      res.on("data", (c) => body += c);
-      res.on("end", () => res.statusCode >= 200 && res.statusCode < 300 ? resolve(body) : reject(new Error("LangSmith " + res.statusCode + ": " + body)));
-    });
-    req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
-    req.write(data);
-    req.end();
-  });
-}
-
 // ── ingest ───────────────────────────────────────────────
 
 async function ingest(trace) {
   if (!enabled) return;
   const { method, path, reqHeaders, reqBody, resStatus, resHeaders, resBody, durationMs } = trace;
-  const now = new Date().toISOString();
-  const startTime = new Date(Date.now() - durationMs).toISOString();
 
   const inputs = parseBody(reqBody, {});
   const outputs = resStatus >= 400
     ? { error: parseBody(resBody, resHeaders) }
     : parseBody(resBody, resHeaders);
   const cache = resStatus < 400 ? extractCache(outputs) : {};
+  const model = extractModel(reqBody, resHeaders, resBody);
 
-  const payload = {
-    name: runName(path),
-    run_type: "llm",
-    inputs,
-    outputs,
-    error: resStatus >= 400 ? "HTTP " + resStatus : undefined,
-    start_time: startTime,
-    end_time: now,
-    session_name: PROJECT,
-    extra: {
+  try {
+    const langfuseTrace = langfuse.trace({
+      name: runName(path),
+      sessionId: PROJECT,
+    });
+
+    langfuseTrace.generation({
+      name: runName(path),
+      model,
+      input: inputs,
+      output: outputs,
+      usage: {
+        promptTokens: cache.prompt_tokens || 0,
+        completionTokens: cache.completion_tokens || 0,
+        totalTokens: cache.total_tokens || 0,
+      },
+      level: resStatus >= 400 ? "ERROR" : "DEFAULT",
+      statusMessage: resStatus >= 400 ? "HTTP " + resStatus : undefined,
       metadata: {
-        method, path,
+        method,
+        path,
         duration_ms: durationMs,
-        model: extractModel(reqBody, resHeaders, resBody),
         status: resStatus,
-        // Cache — filterable in LangSmith UI
-        cache_prompt_tokens: cache.prompt_tokens || 0,
         cache_cached_tokens: cache.cached_tokens || 0,
         cache_miss_tokens: cache.cache_miss_tokens || 0,
         cache_hit_ratio: cache.prompt_tokens > 0
           ? (cache.cached_tokens / cache.prompt_tokens).toFixed(4)
           : "0",
-        completion_tokens: cache.completion_tokens || 0,
         reasoning_tokens: cache.reasoning_tokens || 0,
       },
-    },
-  };
-
-  try { await postRun(payload); }
-  catch (err) { console.error("[tee/langsmith] ingest failed:", err.message); }
+    });
+  }
+  catch (err) { console.error("[tee/langfuse] ingest failed:", err.message); }
 }
+
+// Graceful shutdown
+process.on("SIGINT", () => { langfuse?.shutdownAsync?.(); process.exit(); });
+process.on("SIGTERM", () => { langfuse?.shutdownAsync?.(); process.exit(); });
 
 module.exports = { ingest };
 

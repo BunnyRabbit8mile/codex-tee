@@ -16,6 +16,9 @@ module.exports = {
   },
   default_model: "deepseek-v4-pro",
 
-  sinks: [require("./sinks/langsmith")],
+  sinks: [require("./sinks/langfuse")],
   max_mirror_bytes: 1 * 1024 * 1024,
 };
+
+
+
