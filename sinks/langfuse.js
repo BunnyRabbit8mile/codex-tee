@@ -1,12 +1,11 @@
 ﻿// Langfuse sink — parses SSE, extracts cache metrics, sends traces via Langfuse SDK.
 
 const { Langfuse } = require("langfuse");
-const config = require("../config");
 
-const PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY || config.langfuse?.publicKey;
-const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY || config.langfuse?.secretKey;
-const HOST = process.env.LANGFUSE_HOST || config.langfuse?.host || "https://cloud.langfuse.com";
-const PROJECT = process.env.LANGFUSE_PROJECT || config.langfuse?.project || "codex-tee";
+const PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY;
+const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY;
+const HOST = process.env.LANGFUSE_HOST || "https://cloud.langfuse.com";
+const PROJECT = process.env.LANGFUSE_PROJECT || "codex-tee";
 
 let enabled = !!(PUBLIC_KEY && SECRET_KEY);
 if (!enabled) console.warn("[tee/langfuse] LANGFUSE_PUBLIC_KEY+SECRET_KEY not set — disabled");
@@ -62,7 +61,7 @@ function buildSSEOutput(chunks) {
     if (c.type === "response.completed" && c.response) {
       for (const out of (c.response.output || [])) {
         if (out.content) for (const ct of out.content) {
-          if (ct.type === "output_text") text = ct.text;
+          if (ct.type === "output_text") text += ct.text;
         }
       }
     }
@@ -130,6 +129,7 @@ async function ingest(trace) {
     const langfuseTrace = langfuse.trace({
       name: runName(path),
       sessionId: PROJECT,
+      input: inputs,
     });
 
     langfuseTrace.generation({
@@ -162,11 +162,14 @@ async function ingest(trace) {
 }
 
 // Graceful shutdown
-process.on("SIGINT", () => { langfuse?.shutdownAsync?.(); process.exit(); });
-process.on("SIGTERM", () => { langfuse?.shutdownAsync?.(); process.exit(); });
+let _shutting = false;
+async function shutdown() {
+  if (_shutting) return;
+  _shutting = true;
+  if (langfuse) await langfuse.shutdownAsync();
+  process.exit(0);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 module.exports = { ingest };
-
-
-
-
