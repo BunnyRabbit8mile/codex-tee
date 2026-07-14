@@ -1,2 +1,5 @@
-' codex-tee silent launcher ? runs the batch file without a console window
-CreateObject("Wscript.Shell").Run "cmd /c ""C:\Users\hotsa\Documents\Codex\2026-06-29\fake-it-until-make-it-2\work\codex-tee\start-tee.bat""", 0, False
+' codex-tee silent launcher - runs the batch file without a console window
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set shell = CreateObject("Wscript.Shell")
+shell.CurrentDirectory = fso.GetParentFolderName(WScript.ScriptFullName)
+shell.Run "cmd /c """" & fso.GetParentFolderName(WScript.ScriptFullName) & "\start-tee.bat""", 0, False

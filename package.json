@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "codex-tee",
   "version": "1.0.0",
   "description": "OpenAI-compatible tee proxy. Sits between Codex CLI and Codex++, mirrors traffic to pluggable observability sinks.",
@@ -12,6 +12,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "langsmith": "^0.7.13"
+    "langfuse": "^3.0.0"
   }
 }
+
