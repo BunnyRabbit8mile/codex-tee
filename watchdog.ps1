@@ -6,10 +6,16 @@ $log = "$env:TEMP\codex-tee-watchdog.log"
 function Write-Log($msg) {
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     "$ts  $msg" | Out-File -Append $log
-    Write-Host "$ts  $msg"
 }
 
 Write-Log "watchdog started | root=$root"
+
+# Env vars for sinks
+$env:LANGFUSE_PUBLIC_KEY = "pk-lf-2519cd87-652e-4d00-bd81-6c9b0cfb698b"
+$env:LANGFUSE_SECRET_KEY = "sk-lf-2c3de659-a9b8-49a6-b94b-37b4452a187a"
+$env:LANGFUSE_HOST = "https://cloud.langfuse.com"
+$env:LANGFUSE_PROJECT = "codex-tee"
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"
 
 while ($true) {
     Write-Log "starting codex-tee..."
@@ -20,13 +26,9 @@ while ($true) {
 
     while (-not $proc.HasExited) {
         Start-Sleep -Seconds 5
-        # Health check
         try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:57322/_health" -UseBasicParsing -TimeoutSec 3
-            if ($r.StatusCode -ne 200) { Write-Log "health check failed: $($r.StatusCode)" }
+            $null = Invoke-WebRequest -Uri "http://127.0.0.1:57322/_health" -UseBasicParsing -TimeoutSec 3
         } catch {
-            Write-Log "health check error: $_"
-            # If we can't reach it for 3 consecutive tries, kill and restart
             $fails = 0
             for ($i = 0; $i -lt 3; $i++) {
                 Start-Sleep -Seconds 3
@@ -36,7 +38,7 @@ while ($true) {
                 } catch { $fails++ }
             }
             if ($fails -ge 3) {
-                Write-Log "3 consecutive healthcheck fails, killing and restarting"
+                Write-Log "3 fails, restarting"
                 if (-not $proc.HasExited) { $proc.Kill() }
                 break
             }
@@ -44,6 +46,6 @@ while ($true) {
     }
 
     $code = $proc.ExitCode
-    Write-Log "process exited code=$code, restarting in 3s..."
+    Write-Log "exited code=$code, restarting in 3s..."
     Start-Sleep -Seconds 3
 }

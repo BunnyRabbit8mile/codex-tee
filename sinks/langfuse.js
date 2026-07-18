@@ -1,4 +1,4 @@
-﻿// Langfuse sink — parses SSE, extracts cache metrics, sends traces via Langfuse SDK.
+// Langfuse sink — parses SSE, extracts cache metrics, sends traces via Langfuse SDK.
 
 const { Langfuse } = require("langfuse");
 
@@ -88,6 +88,23 @@ function extractCache(outputs) {
 
 // ── body parsing ─────────────────────────────────────────
 
+function truncateInput(obj) {
+  if (obj && obj.messages && Array.isArray(obj.messages)) {
+    const MAX_MSG_CHARS = 50000;
+    let total = 0;
+    obj.messages = obj.messages.filter(m => {
+      const len = JSON.stringify(m).length;
+      total += len;
+      return total <= MAX_MSG_CHARS;
+    });
+    if (total > MAX_MSG_CHARS) {
+      obj._truncated = true;
+      obj._original_message_count = "truncated";
+    }
+  }
+  return obj;
+}
+
 function parseBody(body, headers) {
   if (!body) return {};
   try { return JSON.parse(body); } catch {}
@@ -118,7 +135,7 @@ async function ingest(trace) {
   if (!enabled) return;
   const { method, path, reqBody, resStatus, resHeaders, resBody, durationMs } = trace;
 
-  const inputs = parseBody(reqBody, {});
+  const inputs = truncateInput(parseBody(reqBody, {}));
   const outputs = resStatus >= 400
     ? { error: parseBody(resBody, resHeaders) }
     : parseBody(resBody, resHeaders);
@@ -173,3 +190,4 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 module.exports = { ingest };
+
