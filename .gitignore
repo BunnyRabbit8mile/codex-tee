@@ -1,5 +1,12 @@
-﻿node_modules/
-proxy_out.txt
-proxy_err.txt
+node_modules/
 outputs/
-.env
+viewer/dist/
+*.db
+*.db-wal
+*.db-shm
+*.bak
+*.log
+_google.html
+fix.js
+fetch-trace.js
+langfuse-docker-compose.html
