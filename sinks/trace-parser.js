@@ -25,6 +25,7 @@ function parseSSE(body) {
 
 function deepMerge(target, source) {
   for (const [k, v] of Object.entries(source)) {
+    if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
     if (v && typeof v === "object" && !Array.isArray(v)) {
       target[k] = deepMerge(target[k] || {}, v);
     } else { target[k] = v; }

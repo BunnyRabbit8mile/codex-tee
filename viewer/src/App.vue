@@ -99,6 +99,7 @@ import { LineChart, PieChart, BarChart } from "echarts/charts";
 import { GridComponent, TooltipComponent, LegendComponent, TitleComponent } from "echarts/components";
 import VChart from "vue-echarts";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 
 use([CanvasRenderer, LineChart, PieChart, BarChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent]);
 
@@ -156,11 +157,12 @@ const modelOption = computed(() => ({
 
 const renderedOutput = computed(() => {
   if (!detail.value || !detail.value.output || !detail.value.output.content) return "";
-  try { return marked.parse(detail.value.output.content, { breaks: true, gfm: true }); }
+  try { return sanitize(marked.parse(detail.value.output.content, { breaks: true, gfm: true })); }
   catch { return "<pre>" + esc(detail.value.output.content) + "</pre>"; }
 });
 
 function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+function sanitize(html) { return DOMPurify.sanitize(html, { ALLOWED_TAGS: ["p","br","h1","h2","h3","h4","h5","h6","strong","em","code","pre","ul","ol","li","blockquote","a","img","table","thead","tbody","tr","th","td","hr","del","sup","sub","span","div"], ALLOWED_ATTR: ["href","src","alt","title","class"], ALLOW_DATA_ATTR: false }); }
 function fmtTime(ts) { return ts ? new Date(ts).toLocaleString("zh-CN") : "--"; }
 function fmtTimeShort(ts) { return ts ? new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "--"; }
 function fmtPath(p) { return (p || "").replace(/^\/+v1\/+/, ""); }
@@ -180,9 +182,12 @@ function renderMsg(content) {
   // Remove XML wrapper tags (they break markdown structure)
   text = text.replace(/<\/?[a-zA-Z_][a-zA-Z0-9_-]*_instructions>/g, "");
   text = text.replace(/<\/?(app-context|collaboration_mode|model_switch|permissions)[^>]*>/g, "");
-  // Escape any remaining HTML-like tags
-  text = text.replace(/<(\/?[a-zA-Z_][a-zA-Z0-9_-]*)>/g, "&lt;$1&gt;");
-  try { return marked.parse(text, { breaks: true, gfm: true }); }
+  // Escape all HTML tags before markdown parsing (content is untrusted)
+  text = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Restore markdown code blocks and inline code after escaping
+  text = text.replaceAll("&lt;pre&gt;", "<pre>").replaceAll("&lt;/pre&gt;", "</pre>");
+  text = text.replaceAll("&lt;code&gt;", "<code>").replaceAll("&lt;/code&gt;", "</code>");
+  try { return sanitize(marked.parse(text, { breaks: true, gfm: true })); }
   catch { return "<pre style='white-space:pre-wrap'>" + esc(text) + "</pre>"; }
 }
 
@@ -194,7 +199,7 @@ function fmtToolArgs(argsStr) {
 async function selectTrace(t) {
   activeId.value = t.id;
   try {
-    const r = await fetch("/api/trace/" + t.id);
+    const r = await fetch("/api/trace/" + encodeURIComponent(t.id));
     if (!r.ok) throw new Error();
     detail.value = await r.json();
     showInput.value = true; showOutput.value = true;
