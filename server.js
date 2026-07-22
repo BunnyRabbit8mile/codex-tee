@@ -1,4 +1,4 @@
-﻿// codex-tee — thin proxy between Codex++ and DeepSeek
+// codex-tee — thin proxy between Codex++ and DeepSeek
 //   Codex++ (57321) → tee (57322) → DeepSeek API
 //   Sees Chat Completions format → full cache metrics
 //
@@ -16,6 +16,12 @@ const upstreamHost = upstreamUrl.hostname;
 const upstreamPort = upstreamUrl.port || (upstreamUrl.protocol === "https:" ? 443 : 80);
 const upstreamIsHttps = upstreamUrl.protocol === "https:";
 const upstreamBasePath = upstreamUrl.pathname.replace(/\/+$/, "");
+
+function upstreamPath(clientUrl) {
+  let p = clientUrl;
+  if (upstreamBasePath) p = p.replace(/^\/v1/, "");
+  return upstreamBasePath + p;
+}
 const UPSTREAM_TIMEOUT_MS = 120_000;
 
 function cloneHeaders(hdrs) {
@@ -98,7 +104,7 @@ function forwardUpstream(clientReq, reqBody, traceBase) {
     const upstreamReq = transport.request({
       hostname: upstreamHost,
       port: upstreamPort,
-      path: upstreamBasePath + clientReq.url,
+      path: upstreamPath(clientReq.url),
       method: clientReq.method,
       headers: {
         ...fwdHeaders,
@@ -140,9 +146,10 @@ async function handleRequest(clientReq, clientRes) {
   }
 
   const startTime = Date.now();
+  let rawBody = null;
 
   try {
-    const rawBody = await bufferBody(clientReq);
+    rawBody = await bufferBody(clientReq);
     const rewrittenBody = maybeRewriteBody(rawBody);
 
     const traceBase = {
