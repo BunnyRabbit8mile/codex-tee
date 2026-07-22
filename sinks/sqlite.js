@@ -85,4 +85,7 @@ function ingest(trace) {
 
 
 process.on("exit", () => { if (_db) _db.close(); });
+["SIGINT", "SIGTERM"].forEach((sig) => {
+  process.on(sig, () => { if (_db) { _db.close(); } process.exit(0); });
+});
 module.exports = { ingest, DB_PATH };

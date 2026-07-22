@@ -10,13 +10,6 @@ function Write-Log($msg) {
 
 Write-Log "watchdog started | root=$root"
 
-# Env vars for sinks
-$env:LANGFUSE_PUBLIC_KEY = "pk-lf-2519cd87-652e-4d00-bd81-6c9b0cfb698b"
-$env:LANGFUSE_SECRET_KEY = "sk-lf-2c3de659-a9b8-49a6-b94b-37b4452a187a"
-$env:LANGFUSE_HOST = "https://cloud.langfuse.com"
-$env:LANGFUSE_PROJECT = "codex-tee"
-$env:LANGFUSE_MAX_EVENT_SIZE_BYTES = "10000000"
-# $env:HTTPS_PROXY = "http://127.0.0.1:7897"
 
 while ($true) {
     Write-Log "starting codex-tee..."

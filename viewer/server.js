@@ -41,7 +41,7 @@ const PORT = 57325;
 const db = fs.existsSync(DB_PATH) ? new DatabaseSync(DB_PATH, { readOnly: true }) : null;
 
 // Exclude noisy GET /v1/models polling requests from all queries
-const NOT_MODELS_POLL = "(method != 'GET' OR path != '/v1/models')";
+const NOT_MODELS_POLL = "(method != 'GET' OR path NOT LIKE '/v1/models%')";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -89,7 +89,7 @@ function safeJsonParse(str, fallback) {
 
 app.onError((err, c) => {
   console.error("[viewer] error:", err.message);
-  return c.json({ error: err.message }, 500);
+  return c.json({ error: "internal server error" }, 500);
 });
 
 app.get("/api/stats", (c) => {
@@ -108,7 +108,7 @@ app.get("/api/stats", (c) => {
 
 app.get("/api/charts/timeline", (c) => {
   if (!db) return c.json([]);
-  const hours = parseInt(c.req.query("hours") || "24");
+  const hours = Math.max(1, parseInt(c.req.query("hours") || "24") || 24);
   const since = Date.now() - hours * 3600 * 1000;
   const rows = db.prepare(
     "SELECT (ts_epoch / 60000) * 60000 as bucket, COUNT(*) c, " +
@@ -136,8 +136,8 @@ app.get("/api/charts/status", (c) => {
 
 app.get("/api/traces", (c) => {
   if (!db) return c.json({ traces: [], total: 0 });
-  const limit = Math.min(parseInt(c.req.query("limit") || "200"), 500);
-  const offset = parseInt(c.req.query("offset") || "0");
+  const limit = Math.max(0, Math.min(parseInt(c.req.query("limit") || "200") || 200, 500));
+  const offset = Math.max(0, parseInt(c.req.query("offset") || "0") || 0);
   const rows = db.prepare(
     "SELECT * FROM traces WHERE " + NOT_MODELS_POLL + " ORDER BY ts_epoch DESC LIMIT ? OFFSET ?"
   ).all(limit, offset);
@@ -157,14 +157,30 @@ app.get("/api/trace/:id", (c) => {
   });
 });
 
-app.get("/*", async (c) => {
-  const p = c.req.path === "/" ? "/index.html" : c.req.path;
-  const fp = path.join(DIST_DIR, p);
-  if (fs.existsSync(fp) && fs.statSync(fp).isFile()) return fileResponse(c, fp);
-  return fileResponse(c, path.join(DIST_DIR, "index.html"));
+// CSP header to prevent inline script execution (defense-in-depth against XSS)
+app.use("*", async (c, next) => {
+  await next();
+  c.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:");
 });
 
-serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" }, (info) => {
+app.get("/*", async (c) => {
+  const p = c.req.path === "/" ? "/index.html" : c.req.path;
+  // Resolve and contain: reject any path that escapes DIST_DIR
+  const resolved = path.resolve(DIST_DIR, "." + p);
+  const distRoot = path.resolve(DIST_DIR);
+  if (!resolved.startsWith(distRoot + path.sep) && resolved !== distRoot) {
+    return c.text("Forbidden", 403);
+  }
+  // Fold existence check into fileResponse's try/catch (no TOCTOU)
+  try {
+    await fs.promises.access(resolved);
+    return fileResponse(c, resolved);
+  } catch {
+    return fileResponse(c, path.join(DIST_DIR, "index.html"));
+  }
+});
+
+serve({ fetch: (...a) => app.fetch(...a), port: PORT, hostname: "127.0.0.1" }, (info) => {
   console.log("[trace-viewer] http://127.0.0.1:" + info.port);
   console.log("[trace-viewer] DB: " + (db ? DB_PATH : "(none)"));
   console.log("[trace-viewer] dist: " + (fs.existsSync(DIST_DIR) ? DIST_DIR : "(not built — run: npm run viewer:build)"));
