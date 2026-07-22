@@ -15,7 +15,8 @@ $env:LANGFUSE_PUBLIC_KEY = "REDACTED"
 $env:LANGFUSE_SECRET_KEY = "REDACTED"
 $env:LANGFUSE_HOST = "https://cloud.langfuse.com"
 $env:LANGFUSE_PROJECT = "codex-tee"
-$env:HTTPS_PROXY = "http://127.0.0.1:7897"
+$env:LANGFUSE_MAX_EVENT_SIZE_BYTES = "10000000"
+# $env:HTTPS_PROXY = "http://127.0.0.1:7897"
 
 while ($true) {
     Write-Log "starting codex-tee..."
@@ -49,3 +50,6 @@ while ($true) {
     Write-Log "exited code=$code, restarting in 3s..."
     Start-Sleep -Seconds 3
 }
+
+
+
