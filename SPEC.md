@@ -48,8 +48,8 @@ codex-tee is a lightweight Node.js proxy that sits between Codex (via Codex++) a
 | Hop | Component | Listen | Upstream | Role |
 |---|---|---|---|---|
 | 1 | Codex | — | 127.0.0.1:57321/v1 | Desktop client |
-| 2 | Codex++ | 127.0.0.1:57321 | 127.0.0.1:57322/v1 | Widget injection + pass-through |
-| 3 | codex-tee | 127.0.0.1:57322 | https://qianfan.baidubce.com/v2/tokenplan/personal | Trace + model rewrite + forward |
+| 2 | Codex++ | 127.0.0.1:57321 | 192.168.124.6:57322/v1 | Widget injection + pass-through |
+| 3 | codex-tee | 192.168.124.6:57322 | https://qianfan.baidubce.com/v2/tokenplan/personal | Trace + model rewrite + forward |
 | 4 | Qianfan API | qianfan.baidubce.com | — | LLM provider |
 | 5 | viewer | 127.0.0.1:57325 | — (reads SQLite) | Dashboard API + static files |
 
@@ -153,7 +153,7 @@ Loads all sinks from config and dispatches traces to each in parallel. Never awa
 
 ```js
 {
-  listen:   { host: "127.0.0.1", port: 57322 },
+  listen:   { host: "192.168.124.6", port: 57322 },
   upstream: { base_url: "https://qianfan.baidubce.com/v2/tokenplan/personal" },
   model_rewrite: {
     "gpt-5.4": "qianfan-code-latest",
@@ -330,5 +330,5 @@ codex-tee/
 ## 9. Requirements
 
 - **Node.js 26+** — uses built-in `node:sqlite` module
-- **npm dependencies:** hono, @hono/node-server, vue, vue-echarts, echarts, marked, vite, @vitejs/plugin-vue
+- **npm dependencies:** hono, @hono/node-server, vue, vue-echarts, echarts, marked, dompurify, vite, @vitejs/plugin-vue
 - **No external services** — SQLite is a local file, viewer is a local HTTP server

@@ -17,10 +17,10 @@ Codex (57321) ──→ codex-tee (57322) ──→ Qianfan API
 
 ```bash
 start-tee.bat
-# → [tee] 127.0.0.1:57322 → https://qianfan.baidubce.com/v2/tokenplan/personal
+# → [tee] 192.168.124.6:57322 → https://qianfan.baidubce.com
 ```
 
-Configure Codex upstream to `http://127.0.0.1:57322/v1`.
+Configure Codex upstream to `http://192.168.124.6:57322/v1`.
 
 ### Start the viewer
 
@@ -99,4 +99,4 @@ codex-tee/
 ## Requirements
 
 - Node.js 26+ (uses built-in `node:sqlite`)
-- npm dependencies: `hono`, `@hono/node-server`, `vue`, `vue-echarts`, `echarts`, `marked`, `vite`, `@vitejs/plugin-vue`
+- npm dependencies: `hono`, `@hono/node-server`, `vue`, `vue-echarts`, `echarts`, `marked`, `dompurify`, `vite`, `@vitejs/plugin-vue`

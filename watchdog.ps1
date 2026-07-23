@@ -21,13 +21,13 @@ while ($true) {
     while (-not $proc.HasExited) {
         Start-Sleep -Seconds 5
         try {
-            $null = Invoke-WebRequest -Uri "http://127.0.0.1:57322/_health" -UseBasicParsing -TimeoutSec 3
+            $null = Invoke-WebRequest -Uri "http://192.168.124.6:57322/_health" -UseBasicParsing -TimeoutSec 3
         } catch {
             $fails = 0
             for ($i = 0; $i -lt 3; $i++) {
                 Start-Sleep -Seconds 3
                 try {
-                    $r = Invoke-WebRequest -Uri "http://127.0.0.1:57322/_health" -UseBasicParsing -TimeoutSec 3
+                    $r = Invoke-WebRequest -Uri "http://192.168.124.6:57322/_health" -UseBasicParsing -TimeoutSec 3
                     if ($r.StatusCode -eq 200) { $fails = 0; break }
                 } catch { $fails++ }
             }

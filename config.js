@@ -1,7 +1,7 @@
 // codex-tee — proxy between Codex++ and Qianfan
 //   Rewrites gpt-* model names for sub-agent spawns
 module.exports = {
-  listen: { host: "127.0.0.1", port: 57322 },
+  listen: { host: "192.168.124.6", port: 57322 },
 
   // Qianfan API
   upstream: { base_url: "https://qianfan.baidubce.com/v2/tokenplan/personal" },

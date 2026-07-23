@@ -1,12 +1,12 @@
-// codex-tee — thin proxy between Codex++ and DeepSeek
-//   Codex++ (57321) → tee (57322) → DeepSeek API
+// codex-tee — transparent tee proxy between Codex++ and Qianfan
+//   Codex++ (57321) → tee (57322) → Qianfan API
 //   Sees Chat Completions format → full cache metrics
 //
 // Usage: node --use-system-ca server.js
 
 const http = require("http");
 const https = require("https");
-const { Transform } = require("stream");
+const { Transform, pipeline } = require("stream");
 const config = require("./config");
 const { dispatch } = require("./sinks/registry");
 
@@ -23,6 +23,7 @@ function upstreamPath(clientUrl) {
   return upstreamBasePath + p;
 }
 const UPSTREAM_TIMEOUT_MS = 120_000;
+const MAX_REQ_BODY = 10 * 1024 * 1024; // 10MB
 
 function cloneHeaders(hdrs) {
   const out = {};
@@ -33,8 +34,20 @@ function cloneHeaders(hdrs) {
 function bufferBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (c) => { chunks.push(c); });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+    let size = 0;
+    let rejected = false;
+    req.on("data", (c) => {
+      if (rejected) return;
+      size += c.length;
+      if (size > MAX_REQ_BODY) {
+        rejected = true;
+        req.destroy();
+        reject(new Error("request body too large"));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => { if (!rejected) resolve(Buffer.concat(chunks)); });
     req.on("error", reject);
   });
 }
@@ -100,6 +113,7 @@ function forwardUpstream(clientReq, reqBody, traceBase) {
     delete fwdHeaders["connection"];
     delete fwdHeaders["transfer-encoding"];
 
+    console.log("[tee] →", upstreamHost, clientReq.method, clientReq.url);
     const transport = upstreamIsHttps ? https : http;
     const upstreamReq = transport.request({
       hostname: upstreamHost,
@@ -119,6 +133,7 @@ function forwardUpstream(clientReq, reqBody, traceBase) {
     });
 
     upstreamReq.on("response", (upstreamRes) => {
+      console.log("status:", upstreamRes.statusCode);
       resolve({
         statusCode: upstreamRes.statusCode,
         headers: upstreamRes.headers,
@@ -138,6 +153,7 @@ function forwardUpstream(clientReq, reqBody, traceBase) {
 }
 
 async function handleRequest(clientReq, clientRes) {
+  console.log(clientReq.method, clientReq.url);
   // Health check
   if (clientReq.method === "GET" && clientReq.url === "/_health") {
     clientRes.writeHead(200, { "content-type": "application/json" });
@@ -162,7 +178,11 @@ async function handleRequest(clientReq, clientRes) {
 
     const { statusCode, headers, stream, trace } = await forwardUpstream(clientReq, rewrittenBody, traceBase);
     clientRes.writeHead(statusCode, headers);
-    stream.pipe(new TeeStream(trace)).pipe(clientRes);
+    pipeline(stream, new TeeStream(trace), clientRes, (err) => {
+      if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+        console.error("[tee] stream pipeline error:", err.message);
+      }
+    });
   } catch (err) {
     console.error("[tee] upstream error:", err.message);
     if (!clientRes.headersSent) {
