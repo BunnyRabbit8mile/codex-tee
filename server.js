@@ -88,6 +88,7 @@ class TeeStream extends Transform {
     this.traceBase = traceBase;
     this.chunks = [];
     this.byteCount = 0;
+    this.dispatched = false;
   }
   _transform(chunk, _encoding, callback) {
     if (this.byteCount < config.max_mirror_bytes) {
@@ -98,9 +99,18 @@ class TeeStream extends Transform {
     callback();
   }
   _flush(callback) {
+    this._dispatch();
+    callback();
+  }
+  _destroy(err, callback) {
+    if (!this.dispatched) this._dispatch();
+    callback(err);
+  }
+  _dispatch() {
+    if (this.dispatched) return;
+    this.dispatched = true;
     const resBody = Buffer.concat(this.chunks).toString("utf-8");
     dispatch({ ...this.traceBase, resBody, durationMs: Date.now() - this.traceBase.startTime });
-    callback();
   }
 }
 
@@ -179,7 +189,7 @@ async function handleRequest(clientReq, clientRes) {
     const { statusCode, headers, stream, trace } = await forwardUpstream(clientReq, rewrittenBody, traceBase);
     clientRes.writeHead(statusCode, headers);
     pipeline(stream, new TeeStream(trace), clientRes, (err) => {
-      if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+      if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE" && err.code !== "ABORTED" && err.message !== "aborted") {
         console.error("[tee] stream pipeline error:", err.message);
       }
     });
